@@ -99,6 +99,21 @@ wails build
 
 Wails regenerates frontend bindings during `wails dev` and `wails build` when exported Go methods or models change.
 
+## CI Builds and Releases
+
+GitHub Actions builds Rayn for macOS, Windows and Linux on every push or pull request targeting `main`.
+
+Merge builds are uploaded as workflow artifacts. You can find them in the finished GitHub Actions run under `Artifacts`. These artifacts are meant for testing and are retained for a limited time.
+
+Production releases are created from Git tags:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Pushing a `v*` tag builds all supported platforms and attaches the packaged files to a GitHub Release.
+
 ## Project Structure
 
 ```text
