@@ -8,7 +8,7 @@ export function DeleteMaterial(arg1:string):Promise<void>;
 
 export function DeleteProfile(arg1:string):Promise<void>;
 
-export function ExecuteJob(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:main.MaterialProfile):Promise<void>;
+export function ExecuteJob(arg1:string,arg2:string,arg3:number,arg4:string,arg5:string,arg6:main.MaterialProfile,arg7:main.JobOptions):Promise<main.JobExecutionResult>;
 
 export function GetLasers():Promise<Array<main.Laser>>;
 

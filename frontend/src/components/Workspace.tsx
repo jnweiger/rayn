@@ -1,7 +1,9 @@
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
+import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { fabric } from "fabric";
+import * as opentype from "opentype.js";
 import { main } from "../../wailsjs/go/models";
 import { OpenSVGFile } from "../../wailsjs/go/main/App";
+import ipagFontUrl from "../assets/fonts/ipag.ttf?url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,6 +33,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   const [importedObjects, setImportedObjects] = useState<{id: string, name: string, ref: fabric.Object}[]>([]);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [bedPreview, setBedPreview] = useState<"checker" | "white" | "gray" | "dark">("checker");
+  const textFontRef = useRef<any>(null);
 
   const createCheckerPattern = () => {
     const patternCanvas = document.createElement("canvas");
@@ -110,6 +113,21 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   };
 
   const resetZoom = () => applyZoomPercent(100);
+
+  const fitCanvasToContainer = useCallback(() => {
+    if (!containerRef.current || !fabricCanvas.current) return;
+
+    const { width, height } = bedSizeRef.current;
+    const containerWidth = containerRef.current.clientWidth - 40;
+    const containerHeight = containerRef.current.clientHeight - 100;
+    if (containerWidth <= 0 || containerHeight <= 0) return;
+
+    const scaleX = containerWidth / width;
+    const scaleY = containerHeight / height;
+    const nextFitScale = Math.min(scaleX, scaleY, 1);
+    fitScaleRef.current = nextFitScale;
+    applyCanvasScale(nextFitScale * (zoomPercent / 100));
+  }, [zoomPercent]);
 
   const updateObjPos = (obj: fabric.Object) => {
     const rect = obj.getBoundingRect();
@@ -232,6 +250,27 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     applyBedPreview();
   }, [bedPreview]);
 
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    let frame = 0;
+    const scheduleFit = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(fitCanvasToContainer);
+    };
+
+    const observer = new ResizeObserver(scheduleFit);
+    observer.observe(containerRef.current);
+    window.addEventListener("resize", scheduleFit);
+    scheduleFit();
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleFit);
+    };
+  }, [fitCanvasToContainer]);
+
   const handleImportSVG = async () => {
     if (!fabricCanvas.current) return;
 
@@ -248,8 +287,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       }
 
       const toastId = toast.loading(`Importing ${response.fileName}...`);
+      const importContent = await convertTextToPaths(response.content);
 
-      fabric.loadSVGFromString(response.content, (objects, options) => {
+      fabric.loadSVGFromString(importContent.svg, (objects, options) => {
         if (!objects || objects.length === 0) {
           toast.error("No parseable objects found in SVG", { id: toastId });
           return;
@@ -300,13 +340,86 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
           ref: obj
         }]);
 
-        toast.success(`Imported ${response.fileName}`, { id: toastId });
+        toast.success(
+          importContent.convertedTextCount > 0
+            ? `Imported ${response.fileName} (${importContent.convertedTextCount} text object${importContent.convertedTextCount === 1 ? "" : "s"} converted)`
+            : `Imported ${response.fileName}`,
+          { id: toastId },
+        );
       });
 
     } catch (err) {
       console.error(err);
       toast.error("Failed to import SVG");
     }
+  };
+
+  const loadTextFont = () =>
+    new Promise<any>((resolve, reject) => {
+      if (textFontRef.current) {
+        resolve(textFontRef.current);
+        return;
+      }
+
+      fetch(ipagFontUrl)
+        .then((response) => {
+          if (!response.ok) throw new Error(`Font request failed: ${response.status}`);
+          return response.arrayBuffer();
+        })
+        .then((buffer) => {
+          const font = opentype.parse(buffer);
+          textFontRef.current = font;
+          resolve(font);
+        })
+        .catch((error) => {
+          reject(error);
+          return;
+        });
+    });
+
+  const convertTextToPaths = async (svg: string) => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svg, "image/svg+xml");
+    const textNodes = Array.from(doc.querySelectorAll("text"));
+
+    if (textNodes.length === 0) {
+      return { svg, convertedTextCount: 0 };
+    }
+
+    const font = await loadTextFont();
+    let convertedTextCount = 0;
+
+    textNodes.forEach((textNode) => {
+      const text = textNode.textContent || "";
+      if (!text.trim()) return;
+
+      const fontSize = parseFloat(textNode.getAttribute("font-size") || "12") || 12;
+      const d = font.getPath(
+        text,
+        parseFloat(textNode.getAttribute("x") || "0") || 0,
+        parseFloat(textNode.getAttribute("y") || "0") || 0,
+        fontSize,
+        { kerning: true },
+      ).toPathData(2);
+
+      const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("d", d);
+
+      const fill = textNode.getAttribute("fill");
+      const stroke = textNode.getAttribute("stroke");
+      const transform = textNode.getAttribute("transform");
+      const style = textNode.getAttribute("style");
+
+      path.setAttribute("fill", fill || "#000000");
+      if (stroke) path.setAttribute("stroke", stroke);
+      if (transform) path.setAttribute("transform", transform);
+      if (style) path.setAttribute("style", style);
+
+      textNode.replaceWith(path);
+      convertedTextCount += 1;
+    });
+
+    return { svg: new XMLSerializer().serializeToString(doc), convertedTextCount };
   };
 
   useImperativeHandle(ref, () => ({

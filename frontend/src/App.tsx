@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { toast } from "sonner";
+import { Check, Clipboard } from "lucide-react";
 import {
   DeleteLaser,
   DeleteMaterial,
@@ -13,6 +14,15 @@ import {
 } from "../wailsjs/go/main/App";
 import { main } from "../wailsjs/go/models";
 import { Toaster } from "@/components/ui/sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import AppSidebar, { AppView } from "./components/AppSidebar";
 import JobView from "./components/JobView";
 import SettingsView from "./components/settings/SettingsView";
@@ -41,6 +51,12 @@ export default function App() {
   const [, setSvgColors] = useState<string[]>([]);
   const [jobName, setJobName] = useState("Untitled Job");
   const [estimatedDuration, setEstimatedDuration] = useState<JobDurationEstimate | null>(null);
+  const [sendLogOpen, setSendLogOpen] = useState(false);
+  const [sendLogTitle, setSendLogTitle] = useState("Send Log");
+  const [sendLogLines, setSendLogLines] = useState<string[]>([]);
+  const [sendLogSuccess, setSendLogSuccess] = useState<boolean | null>(null);
+  const [sendLogCopied, setSendLogCopied] = useState(false);
+  const [engraveLineSpacing, setEngraveLineSpacing] = useState(0.1);
 
   const activeLaser = lasers.find((laser) => laser.id === activeLaserId);
   const availableMaterials = useMemo(
@@ -284,10 +300,30 @@ export default function App() {
     });
     const id = toast.loading(`Sending "${cleanJobName}" to laser...`);
     setIsExecutingJob(true);
+    setSendLogTitle(`Sending "${cleanJobName}"`);
+    setSendLogLines(["Starting job send..."]);
+    setSendLogSuccess(null);
+    setSendLogOpen(true);
     try {
-      await ExecuteJob(machineType, activeLaser.ipAddress, activeLaser.port, cleanJobName, svgData, materialForJob);
-      toast.success(`"${cleanJobName}" sent to laser`, { id });
+      const result = await ExecuteJob(
+        machineType,
+        activeLaser.ipAddress,
+        activeLaser.port,
+        cleanJobName,
+        svgData,
+        materialForJob,
+        main.JobOptions.createFrom({ engraveLineSpacingMm: engraveLineSpacing }),
+      );
+      setSendLogLines(result.logs || []);
+      setSendLogSuccess(result.success);
+      setSendLogTitle(result.success ? `"${cleanJobName}" transfer acknowledged` : `"${cleanJobName}" failed`);
+      result.success
+        ? toast.success(`"${cleanJobName}" transfer acknowledged`, { id })
+        : toast.error(`Job failed: ${result.message}`, { id });
     } catch (error: any) {
+      setSendLogLines((lines) => [...lines, `Frontend/Wails error: ${error.message || error}`]);
+      setSendLogSuccess(false);
+      setSendLogTitle(`"${cleanJobName}" failed`);
       toast.error(`Job failed: ${error.message || error}`, { id });
     } finally {
       setIsExecutingJob(false);
@@ -322,82 +358,129 @@ export default function App() {
     toast.success(`Estimated duration: ${formatJobDuration(estimate.totalSeconds)}`);
   };
 
+  const handleCopySendLog = async () => {
+    const logText = sendLogLines.join("\n");
+    if (!logText) return;
+
+    try {
+      await navigator.clipboard.writeText(logText);
+      setSendLogCopied(true);
+      toast.success("Send log copied");
+      window.setTimeout(() => setSendLogCopied(false), 1600);
+    } catch {
+      toast.error("Could not copy send log");
+    }
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground">
       <Toaster position="bottom-right" />
+      <Dialog open={sendLogOpen} onOpenChange={setSendLogOpen}>
+        <DialogContent className="max-h-[82vh] max-w-3xl gap-0 overflow-hidden p-0">
+          <DialogHeader className="border-b px-6 py-4">
+            <DialogTitle>{sendLogTitle}</DialogTitle>
+            <DialogDescription>
+              {sendLogSuccess === null
+                ? "Rayn is sending the job."
+                : sendLogSuccess
+                  ? "The controller acknowledged the packets. The log shows whether the upload reached the protocol layer."
+                  : "The transfer failed or the controller rejected part of the job."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[56vh] overflow-auto bg-muted/30 p-4">
+            <pre className="whitespace-pre-wrap rounded-lg border bg-background p-4 font-mono text-xs leading-5 text-foreground">
+              {sendLogLines.length > 0 ? sendLogLines.join("\n") : "No log entries yet."}
+            </pre>
+          </div>
+          <DialogFooter className="mx-0 mb-0 rounded-none">
+            <Button variant="outline" onClick={handleCopySendLog} disabled={sendLogLines.length === 0}>
+              {sendLogCopied ? <Check className="mr-2 size-4" /> : <Clipboard className="mr-2 size-4" />}
+              {sendLogCopied ? "Copied" : "Copy Log"}
+            </Button>
+            <Button variant="outline" onClick={() => setSendLogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <AppSidebar activeView={activeView} onViewChange={setActiveView} />
-      {activeView === "jobs" ? (
-        <JobView
-          workspaceRef={workspaceRef}
-          lasers={lasers}
-          materials={availableMaterials}
-          activeLaser={activeLaser}
-          activeMaterial={activeMaterial}
-          activeThicknessId={activeThicknessId}
-          activeThickness={activeThickness}
-          activeLaserId={activeLaserId}
-          activeMaterialId={activeMaterialId}
-          jobName={jobName}
-          estimatedDuration={estimatedDuration}
-          isExecutingJob={isExecutingJob}
-          onColorsDetected={setSvgColors}
-          onActiveLaserChange={(id) => {
-            if (!id) return;
-            setActiveLaserId(id);
-            setActiveMaterialId("none");
-            setActiveThicknessId("none");
-            setEstimatedDuration(null);
-          }}
-          onActiveMaterialChange={(id) => {
-            if (!id) return;
-            setActiveMaterialId(id);
-            setActiveThicknessId("none");
-            setEstimatedDuration(null);
-          }}
-          onJobNameChange={setJobName}
-          onActiveThicknessChange={(id) => {
-            setActiveThicknessId(id);
-            setEstimatedDuration(null);
-          }}
-          onEstimateDuration={handleEstimateDuration}
-          onStartJob={handleStartJob}
-        />
-      ) : (
-        <SettingsView
-          lasers={lasers}
-          materials={materials}
-          selectedMaterialLaserId={selectedMaterialLaserId}
-          editingLaserId={editingLaserId}
-          editingLaser={editingLaser}
-          editingMaterialId={editingMaterialId}
-          editingMaterial={editingMaterial}
-          isTestingConnection={isTestingConnection}
-          onNewLaser={handleNewLaser}
-          onEditLaser={(laser) => {
-            setEditingLaserId(laser.id);
-            setEditingLaser(laser);
-          }}
-          onEditingLaserChange={setEditingLaser}
-          onMachineTypeChange={handleMachineTypeChange}
-          onCancelEdit={() => setEditingLaserId(null)}
-          onSaveLaser={handleSaveLaser}
-          onDeleteLaser={handleDeleteLaser}
-          onTestConnection={handleTestConnection}
-          onNewMaterial={handleNewMaterial}
-          onSelectedMaterialLaserChange={(id) => {
-            setSelectedMaterialLaserId(id);
-            setEditingMaterialId(null);
-          }}
-          onEditMaterial={(material) => {
-            setEditingMaterialId(material.id);
-            setEditingMaterial({ ...material, laserId: material.laserId || selectedMaterialLaserId });
-          }}
-          onEditingMaterialChange={setEditingMaterial}
-          onCancelMaterialEdit={() => setEditingMaterialId(null)}
-          onSaveMaterial={handleSaveMaterial}
-          onDeleteMaterial={handleDeleteMaterial}
-        />
-      )}
+      <div className="min-w-0 flex-1">
+        <div className={activeView === "jobs" ? "flex h-full min-w-0" : "hidden"}>
+          <JobView
+            workspaceRef={workspaceRef}
+            lasers={lasers}
+            materials={availableMaterials}
+            activeLaser={activeLaser}
+            activeMaterial={activeMaterial}
+            activeThicknessId={activeThicknessId}
+            activeThickness={activeThickness}
+            activeLaserId={activeLaserId}
+            activeMaterialId={activeMaterialId}
+            jobName={jobName}
+            engraveLineSpacing={engraveLineSpacing}
+            estimatedDuration={estimatedDuration}
+            isExecutingJob={isExecutingJob}
+            onColorsDetected={setSvgColors}
+            onActiveLaserChange={(id) => {
+              if (!id) return;
+              setActiveLaserId(id);
+              setActiveMaterialId("none");
+              setActiveThicknessId("none");
+              setEstimatedDuration(null);
+            }}
+            onActiveMaterialChange={(id) => {
+              if (!id) return;
+              setActiveMaterialId(id);
+              setActiveThicknessId("none");
+              setEstimatedDuration(null);
+            }}
+            onJobNameChange={setJobName}
+            onEngraveLineSpacingChange={setEngraveLineSpacing}
+            onActiveThicknessChange={(id) => {
+              setActiveThicknessId(id);
+              setEstimatedDuration(null);
+            }}
+            onEstimateDuration={handleEstimateDuration}
+            onStartJob={handleStartJob}
+          />
+        </div>
+        <div className={activeView === "settings" ? "flex h-full min-w-0" : "hidden"}>
+          <SettingsView
+            lasers={lasers}
+            materials={materials}
+            selectedMaterialLaserId={selectedMaterialLaserId}
+            editingLaserId={editingLaserId}
+            editingLaser={editingLaser}
+            editingMaterialId={editingMaterialId}
+            editingMaterial={editingMaterial}
+            isTestingConnection={isTestingConnection}
+            onNewLaser={handleNewLaser}
+            onEditLaser={(laser) => {
+              setEditingLaserId(laser.id);
+              setEditingLaser(laser);
+            }}
+            onEditingLaserChange={setEditingLaser}
+            onMachineTypeChange={handleMachineTypeChange}
+            onCancelEdit={() => setEditingLaserId(null)}
+            onSaveLaser={handleSaveLaser}
+            onDeleteLaser={handleDeleteLaser}
+            onTestConnection={handleTestConnection}
+            onNewMaterial={handleNewMaterial}
+            onSelectedMaterialLaserChange={(id) => {
+              setSelectedMaterialLaserId(id);
+              setEditingMaterialId(null);
+            }}
+            onEditMaterial={(material) => {
+              setEditingMaterialId(material.id);
+              setEditingMaterial({ ...material, laserId: material.laserId || selectedMaterialLaserId });
+            }}
+            onEditingMaterialChange={setEditingMaterial}
+            onCancelMaterialEdit={() => setEditingMaterialId(null)}
+            onSaveMaterial={handleSaveMaterial}
+            onDeleteMaterial={handleDeleteMaterial}
+          />
+        </div>
+      </div>
     </div>
   );
 }

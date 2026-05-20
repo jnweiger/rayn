@@ -43,6 +43,47 @@ type App struct {
 	ctx context.Context
 }
 
+type JobExecutionResult struct {
+	Success bool     `json:"success"`
+	Message string   `json:"message"`
+	Logs    []string `json:"logs"`
+}
+
+type JobExecutionLog struct {
+	lines []string
+}
+
+type JobOptions struct {
+	EngraveLineSpacingMM float64 `json:"engraveLineSpacingMm"`
+}
+
+func normalizeJobOptions(options JobOptions) JobOptions {
+	if options.EngraveLineSpacingMM <= 0 {
+		options.EngraveLineSpacingMM = defaultEngraveLineSpacingMM
+	}
+	if options.EngraveLineSpacingMM < 0.02 {
+		options.EngraveLineSpacingMM = 0.02
+	}
+	if options.EngraveLineSpacingMM > 2 {
+		options.EngraveLineSpacingMM = 2
+	}
+	return options
+}
+
+func (l *JobExecutionLog) Add(format string, args ...interface{}) {
+	if l == nil {
+		return
+	}
+	l.lines = append(l.lines, fmt.Sprintf(format, args...))
+}
+
+func (l *JobExecutionLog) Lines() []string {
+	if l == nil {
+		return nil
+	}
+	return append([]string{}, l.lines...)
+}
+
 func NewApp() *App {
 	return &App{}
 }
@@ -309,31 +350,50 @@ func (a *App) OpenSVGFile() FileResponse {
 	}
 }
 
-func (a *App) ExecuteJob(machineType string, ip string, port int, jobName string, svgData string, materialProfile MaterialProfile) error {
+func (a *App) ExecuteJob(machineType string, ip string, port int, jobName string, svgData string, materialProfile MaterialProfile, options JobOptions) JobExecutionResult {
+	jobLog := &JobExecutionLog{}
+	options = normalizeJobOptions(options)
 	if jobName == "" {
 		jobName = "Untitled Job"
 	}
 
-	fmt.Printf("execute job: starting %q\n", jobName)
+	jobLog.Add("Job: %q", jobName)
+	jobLog.Add("Machine type: %s", machineType)
+	jobLog.Add("Target: %s:%d", ip, port)
+	jobLog.Add("Material: %s", materialProfile.Name)
+	jobLog.Add("Engrave scanline spacing: %.3f mm", options.EngraveLineSpacingMM)
+	jobLog.Add("SVG bytes: %d", len(svgData))
 
 	controller, err := NewLaserController(machineType, ip, port)
 	if err != nil {
-		return fmt.Errorf("execute job: %w", err)
+		jobLog.Add("Controller error: %v", err)
+		return JobExecutionResult{Success: false, Message: err.Error(), Logs: jobLog.Lines()}
 	}
 
+	jobLog.Add("Connecting...")
 	if err := controller.Connect(); err != nil {
-		return fmt.Errorf("execute job: connection failed: %w", err)
+		jobLog.Add("Connection failed: %v", err)
+		return JobExecutionResult{Success: false, Message: fmt.Sprintf("connection failed: %v", err), Logs: jobLog.Lines()}
 	}
+	jobLog.Add("Connection ready.")
 
-	defer func() {
-		if err := controller.Disconnect(); err != nil {
-			fmt.Printf("execute job: disconnect warning: %v\n", err)
+	if err := controller.SendJob(jobName, svgData, materialProfile, options, jobLog); err != nil {
+		jobLog.Add("Send failed: %v", err)
+		if disconnectErr := controller.Disconnect(); disconnectErr != nil {
+			jobLog.Add("Disconnect warning: %v", disconnectErr)
+		} else {
+			jobLog.Add("Connection closed.")
 		}
-	}()
-
-	if err := controller.SendJob(svgData, materialProfile); err != nil {
-		return fmt.Errorf("execute job: send failed: %w", err)
+		return JobExecutionResult{Success: false, Message: fmt.Sprintf("send failed: %v", err), Logs: jobLog.Lines()}
 	}
 
-	return nil
+	if err := controller.Disconnect(); err != nil {
+		jobLog.Add("Disconnect warning: %v", err)
+	} else {
+		jobLog.Add("Connection closed.")
+	}
+
+	jobLog.Add("Transfer completed: every packet was acknowledged by the controller.")
+	jobLog.Add("Note: ACKs confirm packet reception, not that the file is visible in the Ruida file list.")
+	return JobExecutionResult{Success: true, Message: "transfer acknowledged", Logs: jobLog.Lines()}
 }

@@ -36,6 +36,34 @@ export namespace main {
 	        this.error = source["error"];
 	    }
 	}
+	export class JobExecutionResult {
+	    success: boolean;
+	    message: string;
+	    logs: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new JobExecutionResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.logs = source["logs"];
+	    }
+	}
+	export class JobOptions {
+	    engraveLineSpacingMm: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new JobOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.engraveLineSpacingMm = source["engraveLineSpacingMm"];
+	    }
+	}
 	export class Laser {
 	    id: string;
 	    name: string;

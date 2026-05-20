@@ -16,6 +16,7 @@ interface JobViewProps {
   activeMaterialId: string;
   activeThicknessId: string;
   jobName: string;
+  engraveLineSpacing: number;
   estimatedDuration?: JobDurationEstimate | null;
   isExecutingJob: boolean;
   onColorsDetected: (colors: string[]) => void;
@@ -23,6 +24,7 @@ interface JobViewProps {
   onActiveMaterialChange: (id: string) => void;
   onActiveThicknessChange: (id: string) => void;
   onJobNameChange: (name: string) => void;
+  onEngraveLineSpacingChange: (spacing: number) => void;
   onEstimateDuration: () => void;
   onStartJob: () => void;
 }
@@ -38,6 +40,7 @@ export default function JobView({
   activeMaterialId,
   activeThicknessId,
   jobName,
+  engraveLineSpacing,
   estimatedDuration,
   isExecutingJob,
   onColorsDetected,
@@ -45,6 +48,7 @@ export default function JobView({
   onActiveMaterialChange,
   onActiveThicknessChange,
   onJobNameChange,
+  onEngraveLineSpacingChange,
   onEstimateDuration,
   onStartJob,
 }: JobViewProps) {
@@ -78,12 +82,14 @@ export default function JobView({
         activeThicknessId={activeThicknessId}
         activeThickness={activeThickness}
         jobName={jobName}
+        engraveLineSpacing={engraveLineSpacing}
         estimatedDuration={estimatedDuration}
         isExecutingJob={isExecutingJob}
         onActiveLaserChange={onActiveLaserChange}
         onActiveMaterialChange={onActiveMaterialChange}
         onActiveThicknessChange={onActiveThicknessChange}
         onJobNameChange={onJobNameChange}
+        onEngraveLineSpacingChange={onEngraveLineSpacingChange}
         onEstimateDuration={onEstimateDuration}
         onStartJob={onStartJob}
       />

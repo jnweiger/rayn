@@ -1,6 +1,15 @@
+import { useState } from "react";
 import { Calculator, Clock3, Play, SlidersHorizontal } from "lucide-react";
 import { main } from "../../wailsjs/go/models";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
@@ -19,12 +28,14 @@ interface JobSettingsPanelProps {
   activeMaterial?: main.MaterialProfile;
   activeThickness?: main.MaterialThicknessSettings;
   jobName: string;
+  engraveLineSpacing: number;
   estimatedDuration?: JobDurationEstimate | null;
   isExecutingJob: boolean;
   onActiveLaserChange: (id: string) => void;
   onActiveMaterialChange: (id: string) => void;
   onActiveThicknessChange: (id: string) => void;
   onJobNameChange: (name: string) => void;
+  onEngraveLineSpacingChange: (spacing: number) => void;
   onEstimateDuration: () => void;
   onStartJob: () => void;
 }
@@ -83,19 +94,59 @@ export default function JobSettingsPanel({
   activeMaterial,
   activeThickness,
   jobName,
+  engraveLineSpacing,
   estimatedDuration,
   isExecutingJob,
   onActiveLaserChange,
   onActiveMaterialChange,
   onActiveThicknessChange,
   onJobNameChange,
+  onEngraveLineSpacingChange,
   onEstimateDuration,
   onStartJob,
 }: JobSettingsPanelProps) {
   const canPrepareJob = activeLaserId !== "" && activeMaterialId !== "none" && activeThicknessId !== "none";
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   return (
     <aside className="flex h-full w-96 shrink-0 flex-col border-l bg-background">
+      <Dialog open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Advanced Job Options</DialogTitle>
+            <DialogDescription>Fine-tune generation settings for this job.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="engrave-line-spacing">Scanline Spacing</Label>
+            <div className="relative">
+              <Input
+                id="engrave-line-spacing"
+                type="number"
+                min="0.02"
+                max="2"
+                step="0.01"
+                value={engraveLineSpacing}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  if (Number.isFinite(value)) onEngraveLineSpacingChange(value);
+                }}
+                className="pr-12"
+              />
+              <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">
+                mm
+              </span>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAdvancedOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <div className="flex h-16 items-center gap-3 border-b px-6">
         <SlidersHorizontal className="size-4 text-muted-foreground" />
         <div>
@@ -202,6 +253,19 @@ export default function JobSettingsPanel({
               Select a material and thickness to view operations.
             </div>
           )}
+        </div>
+
+        <Separator />
+
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label>Advanced</Label>
+            <span className="font-mono text-xs text-muted-foreground">{engraveLineSpacing.toFixed(2)} mm</span>
+          </div>
+          <Button type="button" variant="outline" className="w-full justify-start" onClick={() => setAdvancedOpen(true)}>
+            <SlidersHorizontal className="mr-2 size-4" />
+            Advanced Options
+          </Button>
         </div>
 
         <Separator />
