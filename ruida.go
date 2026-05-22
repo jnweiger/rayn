@@ -23,6 +23,7 @@ const (
 	ruidaChunkSize              = 998
 	defaultEngraveLineSpacingMM = 0.1
 	ruidaMinimumEngraveLineMM   = 0.05
+	ruidaMarkMinPowerRatio      = 0.35
 )
 
 type RuidaController struct {
@@ -42,6 +43,11 @@ type ruidaSegment struct {
 	from ruidaPoint
 	to   ruidaPoint
 	op   string
+}
+
+type ruidaFillShape struct {
+	contours [][]ruidaPoint
+	op       string
 }
 
 type ruidaBounds struct {
@@ -139,18 +145,22 @@ func (r *RuidaController) SendJob(jobName string, svgData string, profile Materi
 		return fmt.Errorf("ruida: no enabled vector layers found")
 	}
 	for i, layer := range layers {
+		minPower, maxPower := layerPowerRange(layer)
 		jobLog.Add(
 			"Layer %d: %s, %d segment(s), speed %d, power %d%%, bounds %.3f/%.3f to %.3f/%.3f mm.",
 			i,
 			layer.op,
 			len(layer.segments),
 			layer.settings.Speed,
-			layer.settings.Power,
+			maxPower,
 			layer.bounds.minX,
 			layer.bounds.minY,
 			layer.bounds.maxX,
 			layer.bounds.maxY,
 		)
+		if layer.op == "mark" && minPower != maxPower {
+			jobLog.Add("Layer %d mark power compensation: min %d%%, max %d%%.", i, minPower, maxPower)
+		}
 		if layer.op == "engrave" {
 			jobLog.Add("Layer %d engrave fill mode: bidirectional scanlines at %.2f mm spacing.", i, options.EngraveLineSpacingMM)
 		}
@@ -293,10 +303,10 @@ func buildRuidaJob(jobName string, layers []ruidaLayer) ([]byte, error) {
 		stream.hex("E761").byteInt(i).absoluteMM(layer.bounds.minX).absoluteMM(layer.bounds.minY)
 		stream.hex("E762").byteInt(i).absoluteMM(layer.bounds.maxX).absoluteMM(layer.bounds.maxY)
 
-		power := clampInt(layer.settings.Power, 0, 100)
+		minPower, maxPower := layerPowerRange(layer)
 		speed := clampInt(layer.settings.Speed, 1, 1000)
-		stream.hex("C631").byteInt(i).percent(power)
-		stream.hex("C632").byteInt(i).percent(power)
+		stream.hex("C631").byteInt(i).percent(minPower)
+		stream.hex("C632").byteInt(i).percent(maxPower)
 		stream.hex("C904").byteInt(i).absoluteMM(float64(speed))
 		stream.hex("C660").byteInt(i).hex("00").longInt(20000)
 		stream.hex("CA06").byteInt(i).longInt(int64(layer.color))
@@ -312,8 +322,8 @@ func buildRuidaJob(jobName string, layers []ruidaLayer) ([]byte, error) {
 		stream.hex("CA02").byteInt(i)
 		stream.hex("CA0113")
 		stream.hex("C902").absoluteMM(float64(speed))
-		stream.hex("C601").percent(power)
-		stream.hex("C602").percent(power)
+		stream.hex("C601").percent(minPower)
+		stream.hex("C602").percent(maxPower)
 		stream.hex("CA030F")
 		stream.hex("CA1000")
 
@@ -329,6 +339,16 @@ func buildRuidaJob(jobName string, layers []ruidaLayer) ([]byte, error) {
 	stream.hex("D7")
 
 	return stream.buf.Bytes(), stream.err()
+}
+
+func layerPowerRange(layer ruidaLayer) (int, int) {
+	maxPower := clampInt(layer.settings.Power, 0, 100)
+	minPower := maxPower
+	if layer.op == "mark" && maxPower > 0 {
+		minPower = int(math.Round(float64(maxPower) * ruidaMarkMinPowerRatio))
+		minPower = clampInt(minPower, 1, maxPower)
+	}
+	return minPower, maxPower
 }
 
 func ruidaFilename(jobName string) string {
@@ -445,6 +465,7 @@ func parseRuidaSVG(svgData string, options JobOptions) ([]ruidaSegment, error) {
 	transforms := []ruidaTransform{identityTransform()}
 	styles := []ruidaStyle{{}}
 	var segments []ruidaSegment
+	var fillShapes []ruidaFillShape
 
 	for {
 		token, err := decoder.Token()
@@ -465,7 +486,11 @@ func parseRuidaSVG(svgData string, options JobOptions) ([]ruidaSegment, error) {
 			styles = append(styles, style)
 
 			op := operationForStyle(style)
-			segments = append(segments, parseElementSegments(t, transform, style, op, options)...)
+			elementSegments, elementFill := parseElementGeometry(t, transform, style, op)
+			segments = append(segments, elementSegments...)
+			if elementFill.op != "" && len(elementFill.contours) > 0 {
+				fillShapes = append(fillShapes, elementFill)
+			}
 
 		case xml.EndElement:
 			if len(transforms) > 1 {
@@ -475,15 +500,16 @@ func parseRuidaSVG(svgData string, options JobOptions) ([]ruidaSegment, error) {
 		}
 	}
 
+	segments = append(segments, hatchFillShapes(fillShapes, options.EngraveLineSpacingMM)...)
 	return segments, nil
 }
 
-func parseElementSegments(element xml.StartElement, transform ruidaTransform, style ruidaStyle, op string, options JobOptions) []ruidaSegment {
+func parseElementGeometry(element xml.StartElement, transform ruidaTransform, style ruidaStyle, op string) ([]ruidaSegment, ruidaFillShape) {
 	switch strings.ToLower(element.Name.Local) {
 	case "line":
 		p1 := transform.apply(ruidaPoint{numberAttr(element.Attr, "x1"), numberAttr(element.Attr, "y1")})
 		p2 := transform.apply(ruidaPoint{numberAttr(element.Attr, "x2"), numberAttr(element.Attr, "y2")})
-		return []ruidaSegment{{from: p1, to: p2, op: op}}
+		return []ruidaSegment{{from: p1, to: p2, op: op}}, ruidaFillShape{}
 
 	case "rect":
 		x := numberAttr(element.Attr, "x")
@@ -491,33 +517,85 @@ func parseElementSegments(element xml.StartElement, transform ruidaTransform, st
 		w := numberAttr(element.Attr, "width")
 		h := numberAttr(element.Attr, "height")
 		if w <= 0 || h <= 0 {
-			return nil
+			return nil, ruidaFillShape{}
 		}
-		points := []ruidaPoint{{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}
+		points := transformPoints([]ruidaPoint{{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}, transform)
 		if shouldScanFill(style, op) {
-			return hatchPolygon(transformPoints(points, transform), op, options.EngraveLineSpacingMM)
+			return nil, ruidaFillShape{contours: [][]ruidaPoint{points}, op: op}
 		}
-		return segmentsFromPoints(points, true, transform, op)
+		return segmentsFromPoints(points, true, identityTransform(), op), ruidaFillShape{}
+
+	case "circle":
+		cx := numberAttr(element.Attr, "cx")
+		cy := numberAttr(element.Attr, "cy")
+		r := numberAttr(element.Attr, "r")
+		if r <= 0 {
+			return nil, ruidaFillShape{}
+		}
+		points := transformPoints(ellipsePoints(cx, cy, r, r), transform)
+		if shouldScanFill(style, op) {
+			return nil, ruidaFillShape{contours: [][]ruidaPoint{points}, op: op}
+		}
+		return segmentsFromPoints(points, true, identityTransform(), op), ruidaFillShape{}
+
+	case "ellipse":
+		cx := numberAttr(element.Attr, "cx")
+		cy := numberAttr(element.Attr, "cy")
+		rx := numberAttr(element.Attr, "rx")
+		ry := numberAttr(element.Attr, "ry")
+		if rx <= 0 || ry <= 0 {
+			return nil, ruidaFillShape{}
+		}
+		points := transformPoints(ellipsePoints(cx, cy, rx, ry), transform)
+		if shouldScanFill(style, op) {
+			return nil, ruidaFillShape{contours: [][]ruidaPoint{points}, op: op}
+		}
+		return segmentsFromPoints(points, true, identityTransform(), op), ruidaFillShape{}
 
 	case "polyline", "polygon":
-		points := parsePointList(attr(element.Attr, "points"))
+		points := transformPoints(parsePointList(attr(element.Attr, "points")), transform)
 		closed := strings.EqualFold(element.Name.Local, "polygon")
 		if closed && shouldScanFill(style, op) {
-			return hatchPolygon(transformPoints(points, transform), op, options.EngraveLineSpacingMM)
+			return nil, ruidaFillShape{contours: [][]ruidaPoint{points}, op: op}
 		}
-		return segmentsFromPoints(points, closed, transform, op)
+		return segmentsFromPoints(points, closed, identityTransform(), op), ruidaFillShape{}
 
 	case "path":
 		segments := parsePathSegments(attr(element.Attr, "d"), transform, op)
 		if shouldScanFill(style, op) {
-			if points, ok := polygonFromSegments(segments); ok {
-				return hatchPolygon(points, op, options.EngraveLineSpacingMM)
+			contours := parsePathContours(attr(element.Attr, "d"), transform)
+			if len(contours) > 0 {
+				return nil, ruidaFillShape{contours: contours, op: op}
 			}
 		}
-		return segments
+		return segments, ruidaFillShape{}
 	}
 
-	return nil
+	return nil, ruidaFillShape{}
+}
+
+func ellipsePoints(cx, cy, rx, ry float64) []ruidaPoint {
+	const minSteps = 24
+	const maxSteps = 96
+
+	circumference := math.Pi * (3*(rx+ry) - math.Sqrt((3*rx+ry)*(rx+3*ry)))
+	steps := int(math.Ceil(circumference / 0.25))
+	if steps < minSteps {
+		steps = minSteps
+	}
+	if steps > maxSteps {
+		steps = maxSteps
+	}
+
+	points := make([]ruidaPoint, 0, steps)
+	for i := 0; i < steps; i++ {
+		angle := 2 * math.Pi * float64(i) / float64(steps)
+		points = append(points, ruidaPoint{
+			x: cx + math.Cos(angle)*rx,
+			y: cy + math.Sin(angle)*ry,
+		})
+	}
+	return points
 }
 
 func shouldScanFill(style ruidaStyle, op string) bool {
@@ -533,39 +611,36 @@ func transformPoints(points []ruidaPoint, transform ruidaTransform) []ruidaPoint
 	return out
 }
 
-func polygonFromSegments(segments []ruidaSegment) ([]ruidaPoint, bool) {
-	if len(segments) < 3 {
-		return nil, false
-	}
-
-	points := make([]ruidaPoint, 0, len(segments))
-	points = append(points, segments[0].from)
-	for _, segment := range segments {
-		last := points[len(points)-1]
-		if distance(last, segment.from) > 0.001 {
-			return nil, false
-		}
-		points = append(points, segment.to)
-	}
-
-	if distance(points[0], points[len(points)-1]) > 0.001 {
-		return nil, false
-	}
-
-	return points[:len(points)-1], true
-}
-
-func hatchPolygon(points []ruidaPoint, op string, spacing float64) []ruidaSegment {
-	if len(points) < 3 {
-		return nil
-	}
+func hatchFillShapes(shapes []ruidaFillShape, spacing float64) []ruidaSegment {
 	if spacing <= 0 {
 		spacing = defaultEngraveLineSpacingMM
 	}
 
+	byOperation := make(map[string][][]ruidaPoint)
+	for _, shape := range shapes {
+		if shape.op == "" {
+			continue
+		}
+		for _, contour := range shape.contours {
+			if len(contour) >= 3 {
+				byOperation[shape.op] = append(byOperation[shape.op], contour)
+			}
+		}
+	}
+
+	var segments []ruidaSegment
+	for op, contours := range byOperation {
+		segments = append(segments, hatchContours(contours, op, spacing)...)
+	}
+	return segments
+}
+
+func hatchContours(contours [][]ruidaPoint, op string, spacing float64) []ruidaSegment {
 	bounds := ruidaBounds{}
-	for _, point := range points {
-		bounds.include(point)
+	for _, contour := range contours {
+		for _, point := range contour {
+			bounds.include(point)
+		}
 	}
 	if !bounds.set || bounds.maxY <= bounds.minY {
 		return nil
@@ -574,29 +649,50 @@ func hatchPolygon(points []ruidaPoint, op string, spacing float64) []ruidaSegmen
 	var segments []ruidaSegment
 	leftToRight := true
 	for y := bounds.minY + spacing/2; y < bounds.maxY; y += spacing {
-		intersections := polygonIntersectionsAtY(points, y)
+		intersections := contoursIntersectionsAtY(contours, y)
 		if len(intersections) < 2 {
 			continue
 		}
 
+		intervals := make([][2]float64, 0, len(intersections)/2)
 		for i := 0; i+1 < len(intersections); i += 2 {
 			x1 := intersections[i]
 			x2 := intersections[i+1]
 			if x2-x1 < ruidaMinimumEngraveLineMM {
 				continue
 			}
+			intervals = append(intervals, [2]float64{x1, x2})
+		}
+		if len(intervals) == 0 {
+			continue
+		}
+		if !leftToRight {
+			for i, j := 0, len(intervals)-1; i < j; i, j = i+1, j-1 {
+				intervals[i], intervals[j] = intervals[j], intervals[i]
+			}
+		}
 
-			from := ruidaPoint{x: x1, y: y}
-			to := ruidaPoint{x: x2, y: y}
+		for _, interval := range intervals {
+			from := ruidaPoint{x: interval[0], y: y}
+			to := ruidaPoint{x: interval[1], y: y}
 			if !leftToRight {
 				from, to = to, from
 			}
 			segments = append(segments, ruidaSegment{from: from, to: to, op: op})
-			leftToRight = !leftToRight
 		}
+		leftToRight = !leftToRight
 	}
 
 	return segments
+}
+
+func contoursIntersectionsAtY(contours [][]ruidaPoint, y float64) []float64 {
+	var intersections []float64
+	for _, contour := range contours {
+		intersections = append(intersections, polygonIntersectionsAtY(contour, y)...)
+	}
+	sort.Float64s(intersections)
+	return intersections
 }
 
 func polygonIntersectionsAtY(points []ruidaPoint, y float64) []float64 {
@@ -760,6 +856,173 @@ func parsePathSegments(d string, transform ruidaTransform, op string) []ruidaSeg
 	}
 
 	return out
+}
+
+func parsePathContours(d string, transform ruidaTransform) [][]ruidaPoint {
+	tokens := tokenizePath(d)
+	var contours [][]ruidaPoint
+	var contour []ruidaPoint
+	var cmd byte
+	var current ruidaPoint
+	var start ruidaPoint
+	i := 0
+
+	nextNumber := func() (float64, bool) {
+		if i >= len(tokens) || isPathCommand(tokens[i]) {
+			return 0, false
+		}
+		value, err := strconv.ParseFloat(tokens[i], 64)
+		if err != nil {
+			return 0, false
+		}
+		i++
+		return value, true
+	}
+
+	finishContour := func() {
+		if len(contour) >= 3 {
+			first := contour[0]
+			last := contour[len(contour)-1]
+			if distance(first, last) <= 0.001 {
+				contour = contour[:len(contour)-1]
+			}
+			if len(contour) >= 3 {
+				contours = append(contours, contour)
+			}
+		}
+		contour = nil
+	}
+
+	appendPoint := func(point ruidaPoint) {
+		transformed := transform.apply(point)
+		if len(contour) == 0 || distance(contour[len(contour)-1], transformed) > 0.001 {
+			contour = append(contour, transformed)
+		}
+	}
+
+	for i < len(tokens) {
+		if isPathCommand(tokens[i]) {
+			cmd = tokens[i][0]
+			i++
+		}
+		if cmd == 0 {
+			break
+		}
+
+		relative := unicode.IsLower(rune(cmd))
+		switch unicode.ToUpper(rune(cmd)) {
+		case 'M':
+			x, okX := nextNumber()
+			y, okY := nextNumber()
+			if !okX || !okY {
+				finishContour()
+				return contours
+			}
+			finishContour()
+			current = makePoint(x, y, current, relative)
+			start = current
+			appendPoint(current)
+			cmd = byte(map[bool]rune{true: 'l', false: 'L'}[relative])
+
+		case 'L':
+			for {
+				x, okX := nextNumber()
+				y, okY := nextNumber()
+				if !okX || !okY {
+					break
+				}
+				current = makePoint(x, y, current, relative)
+				appendPoint(current)
+			}
+
+		case 'H':
+			for {
+				x, ok := nextNumber()
+				if !ok {
+					break
+				}
+				if relative {
+					current.x += x
+				} else {
+					current.x = x
+				}
+				appendPoint(current)
+			}
+
+		case 'V':
+			for {
+				y, ok := nextNumber()
+				if !ok {
+					break
+				}
+				if relative {
+					current.y += y
+				} else {
+					current.y = y
+				}
+				appendPoint(current)
+			}
+
+		case 'C':
+			for {
+				x1, ok1 := nextNumber()
+				y1, ok2 := nextNumber()
+				x2, ok3 := nextNumber()
+				y2, ok4 := nextNumber()
+				x, ok5 := nextNumber()
+				y, ok6 := nextNumber()
+				if !(ok1 && ok2 && ok3 && ok4 && ok5 && ok6) {
+					break
+				}
+				p0 := current
+				p1 := makePoint(x1, y1, current, relative)
+				p2 := makePoint(x2, y2, current, relative)
+				p3 := makePoint(x, y, current, relative)
+				for step := 1; step <= 24; step++ {
+					t := float64(step) / 24
+					appendPoint(ruidaPoint{
+						x: math.Pow(1-t, 3)*p0.x + 3*math.Pow(1-t, 2)*t*p1.x + 3*(1-t)*t*t*p2.x + t*t*t*p3.x,
+						y: math.Pow(1-t, 3)*p0.y + 3*math.Pow(1-t, 2)*t*p1.y + 3*(1-t)*t*t*p2.y + t*t*t*p3.y,
+					})
+				}
+				current = p3
+			}
+
+		case 'Q':
+			for {
+				x1, ok1 := nextNumber()
+				y1, ok2 := nextNumber()
+				x, ok3 := nextNumber()
+				y, ok4 := nextNumber()
+				if !(ok1 && ok2 && ok3 && ok4) {
+					break
+				}
+				p0 := current
+				p1 := makePoint(x1, y1, current, relative)
+				p2 := makePoint(x, y, current, relative)
+				for step := 1; step <= 18; step++ {
+					t := float64(step) / 18
+					appendPoint(ruidaPoint{
+						x: (1-t)*(1-t)*p0.x + 2*(1-t)*t*p1.x + t*t*p2.x,
+						y: (1-t)*(1-t)*p0.y + 2*(1-t)*t*p1.y + t*t*p2.y,
+					})
+				}
+				current = p2
+			}
+
+		case 'Z':
+			appendPoint(start)
+			current = start
+			finishContour()
+
+		default:
+			finishContour()
+			return contours
+		}
+	}
+
+	finishContour()
+	return contours
 }
 
 func cubicSegments(p0, p1, p2, p3 ruidaPoint, transform ruidaTransform, op string) []ruidaSegment {

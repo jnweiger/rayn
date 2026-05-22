@@ -16,6 +16,8 @@ export function GetMaterials():Promise<Array<main.MaterialProfile>>;
 
 export function GetProfiles():Promise<Array<main.Profile>>;
 
+export function LoadFontDataForFamily(arg1:string):Promise<string>;
+
 export function OpenSVGFile():Promise<main.FileResponse>;
 
 export function SaveLaser(arg1:main.Laser):Promise<void>;

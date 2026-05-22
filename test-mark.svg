@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="120mm" height="80mm" viewBox="0 0 120 80" xmlns="http://www.w3.org/2000/svg">
+  <g fill="none" stroke="#00ff00" stroke-width="0.2">
+    <rect x="10" y="10" width="100" height="60"/>
+    <line x1="20" y1="20" x2="100" y2="60"/>
+    <line x1="100" y1="20" x2="20" y2="60"/>
+    <circle cx="60" cy="40" r="18"/>
+    <polyline points="20,40 35,28 50,40 65,28 80,40 95,28"/>
+  </g>
+</svg>

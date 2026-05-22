@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHand
 import { fabric } from "fabric";
 import * as opentype from "opentype.js";
 import { main } from "../../wailsjs/go/models";
-import { OpenSVGFile } from "../../wailsjs/go/main/App";
+import { LoadFontDataForFamily, OpenSVGFile } from "../../wailsjs/go/main/App";
 import ipagFontUrl from "../assets/fonts/ipag.ttf?url";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +34,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   const [zoomPercent, setZoomPercent] = useState(100);
   const [bedPreview, setBedPreview] = useState<"checker" | "white" | "gray" | "dark">("checker");
   const textFontRef = useRef<any>(null);
+  const fontCacheRef = useRef<Record<string, any>>({});
 
   const createCheckerPattern = () => {
     const patternCanvas = document.createElement("canvas");
@@ -98,11 +99,15 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     if (!fabricCanvas.current) return;
 
     const { width, height } = bedSizeRef.current;
-    fabricCanvas.current.setDimensions({
-      width: Math.round(width * scale),
-      height: Math.round(height * scale),
-    });
-    fabricCanvas.current.setZoom(scale);
+    fabricCanvas.current.setDimensions({ width, height }, { backstoreOnly: true });
+    fabricCanvas.current.setDimensions(
+      {
+        width: `${Math.round(width * scale)}px`,
+        height: `${Math.round(height * scale)}px`,
+      },
+      { cssOnly: true },
+    );
+    fabricCanvas.current.setViewportTransform([1, 0, 0, 1, 0, 0]);
     fabricCanvas.current.requestRenderAll();
   };
 
@@ -129,13 +134,15 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     applyCanvasScale(nextFitScale * (zoomPercent / 100));
   }, [zoomPercent]);
 
+  const roundMm = (value: number) => Math.round(value * 100) / 100;
+
   const updateObjPos = (obj: fabric.Object) => {
     const rect = obj.getBoundingRect();
     setObjPos({
-      x: Math.round(rect.left),
-      y: Math.round(rect.top),
-      w: Math.round(rect.width),
-      h: Math.round(rect.height),
+      x: roundMm(rect.left),
+      y: roundMm(rect.top),
+      w: roundMm(rect.width),
+      h: roundMm(rect.height),
     });
   };
 
@@ -169,14 +176,14 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     const displayScale = scale * (zoomPercent / 100);
 
     fabricCanvas.current = new fabric.Canvas(canvasRef.current, {
-      width: width * displayScale,
-      height: height * displayScale,
+      width,
+      height,
       backgroundColor: "transparent",
       selectionBorderColor: "#2563eb",
       selectionColor: "rgba(37, 99, 235, 0.08)",
     });
 
-    fabricCanvas.current.setZoom(displayScale);
+    applyCanvasScale(displayScale);
     applyBedPreview();
 
     const updateSelection = () => {
@@ -288,8 +295,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
 
       const toastId = toast.loading(`Importing ${response.fileName}...`);
       const importContent = await convertTextToPaths(response.content);
+      const normalizedSvg = normalizeSvgUnitsToMm(importContent.svg);
 
-      fabric.loadSVGFromString(importContent.svg, (objects, options) => {
+      fabric.loadSVGFromString(normalizedSvg, (objects, options) => {
         if (!objects || objects.length === 0) {
           toast.error("No parseable objects found in SVG", { id: toastId });
           return;
@@ -354,7 +362,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     }
   };
 
-  const loadTextFont = () =>
+  const loadFallbackTextFont = () =>
     new Promise<any>((resolve, reject) => {
       if (textFontRef.current) {
         resolve(textFontRef.current);
@@ -377,6 +385,40 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
         });
     });
 
+  const loadFontForTextNode = async (doc: Document, textNode: Element) => {
+    const fontFamily = getInheritedTextAttribute(textNode, "font-family");
+    const family = preferredFontFamily(fontFamily);
+    const cacheKey = family ? normalizeFontFamily(family) : "fallback";
+
+    if (fontCacheRef.current[cacheKey]) {
+      return fontCacheRef.current[cacheKey];
+    }
+
+    const embeddedFont = family ? parseEmbeddedFont(doc, family) : null;
+    if (embeddedFont) {
+      const font = opentype.parse(embeddedFont);
+      fontCacheRef.current[cacheKey] = font;
+      return font;
+    }
+
+    if (family) {
+      try {
+        const fontData = await LoadFontDataForFamily(family);
+        if (fontData) {
+          const font = opentype.parse(base64ToArrayBuffer(fontData));
+          fontCacheRef.current[cacheKey] = font;
+          return font;
+        }
+      } catch (error) {
+        console.warn(`Could not load font "${family}"`, error);
+      }
+    }
+
+    const fallback = await loadFallbackTextFont();
+    fontCacheRef.current[cacheKey] = fallback;
+    return fallback;
+  };
+
   const convertTextToPaths = async (svg: string) => {
     const parser = new DOMParser();
     const doc = parser.parseFromString(svg, "image/svg+xml");
@@ -386,41 +428,270 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       return { svg, convertedTextCount: 0 };
     }
 
-    const font = await loadTextFont();
     let convertedTextCount = 0;
 
-    textNodes.forEach((textNode) => {
-      const text = textNode.textContent || "";
-      if (!text.trim()) return;
+    for (const textNode of textNodes) {
+      const textRuns = collectTextRuns(textNode);
+      if (textRuns.length === 0) continue;
 
-      const fontSize = parseFloat(textNode.getAttribute("font-size") || "12") || 12;
-      const d = font.getPath(
-        text,
-        parseFloat(textNode.getAttribute("x") || "0") || 0,
-        parseFloat(textNode.getAttribute("y") || "0") || 0,
-        fontSize,
-        { kerning: true },
-      ).toPathData(2);
+      const group = doc.createElementNS("http://www.w3.org/2000/svg", "g");
+      const textTransform = textNode.getAttribute("transform");
+      if (textTransform) group.setAttribute("transform", textTransform);
 
-      const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", d);
+      for (const run of textRuns) {
+        const font = await loadFontForTextNode(doc, run.node);
+        const fontSize = parseSvgNumber(getInheritedTextAttribute(run.node, "font-size") || "12") || 12;
+        const x = parseSvgNumber(run.node.getAttribute("x") || textNode.getAttribute("x") || "0") || 0;
+        const y = parseSvgNumber(run.node.getAttribute("y") || textNode.getAttribute("y") || "0") || 0;
+        const anchor = getInheritedTextAttribute(run.node, "text-anchor");
+        const anchorOffset = textAnchorOffset(font, run.text, fontSize, anchor);
+        const d = font.getPath(
+          run.text,
+          x + anchorOffset,
+          y,
+          fontSize,
+          { kerning: true },
+        ).toPathData(2);
 
-      const fill = textNode.getAttribute("fill");
-      const stroke = textNode.getAttribute("stroke");
-      const transform = textNode.getAttribute("transform");
-      const style = textNode.getAttribute("style");
+        const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", d);
 
-      path.setAttribute("fill", fill || "#000000");
-      if (stroke) path.setAttribute("stroke", stroke);
-      if (transform) path.setAttribute("transform", transform);
-      if (style) path.setAttribute("style", style);
+        const fill = getInheritedTextAttribute(run.node, "fill");
+        const stroke = getInheritedTextAttribute(run.node, "stroke");
+        const runTransform = run.node === textNode ? "" : run.node.getAttribute("transform");
 
-      textNode.replaceWith(path);
+        path.setAttribute("fill", fill && fill !== "none" ? fill : "#000000");
+        if (stroke && stroke !== "none") path.setAttribute("stroke", stroke);
+        if (runTransform) path.setAttribute("transform", runTransform);
+
+        group.appendChild(path);
+      }
+
+      textNode.replaceWith(group);
       convertedTextCount += 1;
-    });
+    }
 
     return { svg: new XMLSerializer().serializeToString(doc), convertedTextCount };
   };
+
+  const collectTextRuns = (textNode: Element) => {
+    const tspans = Array.from(textNode.querySelectorAll("tspan"));
+    if (tspans.length === 0) {
+      const text = textNode.textContent || "";
+      return text.trim() ? [{ node: textNode, text }] : [];
+    }
+
+    return tspans
+      .map((node) => ({ node, text: node.textContent || "" }))
+      .filter((run) => run.text.trim());
+  };
+
+  const getInheritedTextAttribute = (node: Element, name: string): string | null => {
+    let current: Element | null = node;
+    while (current) {
+      const direct = current.getAttribute(name);
+      if (direct) return direct;
+
+      const styleValue = styleAttributeValue(current, name);
+      if (styleValue) return styleValue;
+
+      const classValue = cssClassValue(current, name);
+      if (classValue) return classValue;
+
+      current = current.parentElement;
+    }
+    return null;
+  };
+
+  const styleAttributeValue = (node: Element, name: string) => {
+    const style = node.getAttribute("style") || "";
+    for (const part of style.split(";")) {
+      const [key, ...valueParts] = part.split(":");
+      if (key?.trim().toLowerCase() === name) {
+        return valueParts.join(":").trim();
+      }
+    }
+    return "";
+  };
+
+  const cssClassValue = (node: Element, name: string) => {
+    const classNames = (node.getAttribute("class") || "").split(/\s+/).filter(Boolean);
+    if (classNames.length === 0) return "";
+
+    const styles = Array.from(node.ownerDocument.querySelectorAll("style"));
+    for (const className of classNames) {
+      const escapedClass = className.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const rule = new RegExp(`\\.${escapedClass}\\s*{([^}]+)}`, "i");
+      for (const style of styles) {
+        const match = (style.textContent || "").match(rule);
+        if (!match) continue;
+        const value = cssDeclarationValue(match[1], name);
+        if (value) return value;
+      }
+    }
+    return "";
+  };
+
+  const cssDeclarationValue = (declarations: string, name: string) => {
+    for (const part of declarations.split(";")) {
+      const [key, ...valueParts] = part.split(":");
+      if (key?.trim().toLowerCase() === name) {
+        return valueParts.join(":").trim();
+      }
+    }
+    return "";
+  };
+
+  const preferredFontFamily = (fontFamily: string | null) => {
+    if (!fontFamily) return "";
+    const genericFamilies = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"]);
+    for (const family of fontFamily.split(",")) {
+      const clean = family.trim().replace(/^['"]|['"]$/g, "");
+      if (clean && !genericFamilies.has(clean.toLowerCase())) {
+        return clean;
+      }
+    }
+    return "";
+  };
+
+  const normalizeFontFamily = (fontFamily: string) => fontFamily.trim().replace(/^['"]|['"]$/g, "").toLowerCase();
+
+  const parseEmbeddedFont = (doc: Document, fontFamily: string) => {
+    const targetFamily = normalizeFontFamily(fontFamily);
+    const styles = Array.from(doc.querySelectorAll("style"));
+
+    for (const style of styles) {
+      const css = style.textContent || "";
+      const blocks = css.match(/@font-face\s*{[^}]+}/gi) || [];
+      for (const block of blocks) {
+        const familyMatch = block.match(/font-family\s*:\s*([^;]+)/i);
+        if (!familyMatch || normalizeFontFamily(familyMatch[1]) !== targetFamily) {
+          continue;
+        }
+
+        const srcMatch = block.match(/src\s*:\s*url\((['"]?)(data:[^)'"\\]+)\1\)/i);
+        if (!srcMatch) continue;
+
+        const dataUrl = srcMatch[2];
+        const commaIndex = dataUrl.indexOf(",");
+        if (commaIndex < 0) continue;
+
+        const metadata = dataUrl.slice(0, commaIndex).toLowerCase();
+        const data = dataUrl.slice(commaIndex + 1);
+        if (metadata.includes(";base64")) {
+          return base64ToArrayBuffer(data);
+        }
+        return new TextEncoder().encode(decodeURIComponent(data)).buffer;
+      }
+    }
+
+    return null;
+  };
+
+  const base64ToArrayBuffer = (value: string) => {
+    const binary = window.atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+  };
+
+  const textAnchorOffset = (font: any, text: string, fontSize: number, anchor: string | null) => {
+    const width = font.getAdvanceWidth ? font.getAdvanceWidth(text, fontSize, { kerning: true }) : 0;
+    switch ((anchor || "").toLowerCase()) {
+      case "middle":
+        return -width / 2;
+      case "end":
+        return -width;
+      default:
+        return 0;
+    }
+  };
+
+  const normalizeSvgUnitsToMm = (svg: string) => {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svg, "image/svg+xml");
+    const root = doc.documentElement;
+    if (!root || root.nodeName.toLowerCase() !== "svg") {
+      return svg;
+    }
+
+    const viewBox = parseViewBox(root.getAttribute("viewBox"));
+    const width = parseSvgLengthToMm(root.getAttribute("width"));
+    const height = parseSvgLengthToMm(root.getAttribute("height"));
+
+    if (!viewBox || !width || !height || viewBox.width <= 0 || viewBox.height <= 0) {
+      return svg;
+    }
+
+    const scaleX = width / viewBox.width;
+    const scaleY = height / viewBox.height;
+    const translateX = -viewBox.x * scaleX;
+    const translateY = -viewBox.y * scaleY;
+    const wrapper = doc.createElementNS("http://www.w3.org/2000/svg", "g");
+    wrapper.setAttribute(
+      "transform",
+      `matrix(${formatSvgNumber(scaleX)} 0 0 ${formatSvgNumber(scaleY)} ${formatSvgNumber(translateX)} ${formatSvgNumber(translateY)})`,
+    );
+
+    while (root.firstChild) {
+      wrapper.appendChild(root.firstChild);
+    }
+    root.appendChild(wrapper);
+
+    root.setAttribute("width", formatSvgNumber(width));
+    root.setAttribute("height", formatSvgNumber(height));
+    root.setAttribute("viewBox", `0 0 ${formatSvgNumber(width)} ${formatSvgNumber(height)}`);
+
+    return new XMLSerializer().serializeToString(doc);
+  };
+
+  const parseViewBox = (value: string | null) => {
+    if (!value) return null;
+    const parts = value
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isFinite(part))) return null;
+    return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+  };
+
+  const parseSvgLengthToMm = (value: string | null) => {
+    if (!value) return null;
+    const match = value.trim().match(/^(-?(?:\d+|\d*\.\d+)(?:e[-+]?\d+)?)([a-z%]*)$/i);
+    if (!match) return null;
+
+    const amount = Number(match[1]);
+    if (!Number.isFinite(amount)) return null;
+
+    const unit = match[2].toLowerCase();
+    switch (unit) {
+      case "":
+      case "px":
+        return amount * 25.4 / 96;
+      case "mm":
+        return amount;
+      case "cm":
+        return amount * 10;
+      case "in":
+        return amount * 25.4;
+      case "pt":
+        return amount * 25.4 / 72;
+      case "pc":
+        return amount * 25.4 / 6;
+      default:
+        return null;
+    }
+  };
+
+  const parseSvgNumber = (value: string | null) => {
+    if (!value) return 0;
+    const match = value.trim().match(/^-?(?:\d+|\d*\.\d+)(?:e[-+]?\d+)?/i);
+    return match ? Number(match[0]) : 0;
+  };
+
+  const formatSvgNumber = (value: number) => Number(value.toFixed(6)).toString();
 
   useImperativeHandle(ref, () => ({
     triggerImportSVG: handleImportSVG,
@@ -474,7 +745,8 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   };
 
   const handleParamChange = (param: 'x'|'y'|'w'|'h', value: number) => {
-    if (!selectedObject || !fabricCanvas.current || isNaN(value)) return;
+    if (!selectedObject || !fabricCanvas.current || !Number.isFinite(value)) return;
+    if ((param === "w" || param === "h") && value <= 0) return;
     
     if (param === 'x') {
       const rect = selectedObject.getBoundingRect();
@@ -513,6 +785,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
 
   const zoomIn = () => applyZoomPercent(zoomPercent + 10);
   const zoomOut = () => applyZoomPercent(zoomPercent - 10);
+  const formatMmInput = (value: number) => value.toFixed(2);
 
   const renderRulers = () => {
     if (!activeLaser) return null;
@@ -613,8 +886,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
                           <Label className="text-xs">X Pos</Label>
                           <Input 
                             type="number" 
-                            value={objPos.x} 
-                            onChange={(e) => handleParamChange('x', parseFloat(e.target.value) || 0)}
+                            step="0.01"
+                            value={formatMmInput(objPos.x)} 
+                            onChange={(e) => handleParamChange('x', parseFloat(e.target.value))}
                             className="font-mono"
                           />
                         </div>
@@ -622,8 +896,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
                           <Label className="text-xs">Y Pos</Label>
                           <Input 
                             type="number" 
-                            value={objPos.y} 
-                            onChange={(e) => handleParamChange('y', parseFloat(e.target.value) || 0)}
+                            step="0.01"
+                            value={formatMmInput(objPos.y)} 
+                            onChange={(e) => handleParamChange('y', parseFloat(e.target.value))}
                             className="font-mono"
                           />
                         </div>
@@ -631,8 +906,10 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
                           <Label className="text-xs">Width</Label>
                           <Input 
                             type="number" 
-                            value={objPos.w} 
-                            onChange={(e) => handleParamChange('w', parseFloat(e.target.value) || 0)}
+                            step="0.01"
+                            min="0.01"
+                            value={formatMmInput(objPos.w)} 
+                            onChange={(e) => handleParamChange('w', parseFloat(e.target.value))}
                             className="font-mono"
                           />
                         </div>
@@ -640,8 +917,10 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
                           <Label className="text-xs">Height</Label>
                           <Input 
                             type="number" 
-                            value={objPos.h} 
-                            onChange={(e) => handleParamChange('h', parseFloat(e.target.value) || 0)}
+                            step="0.01"
+                            min="0.01"
+                            value={formatMmInput(objPos.h)} 
+                            onChange={(e) => handleParamChange('h', parseFloat(e.target.value))}
                             className="font-mono"
                           />
                         </div>

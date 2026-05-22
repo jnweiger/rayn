@@ -30,6 +30,10 @@ export function GetProfiles() {
   return window['go']['main']['App']['GetProfiles']();
 }
 
+export function LoadFontDataForFamily(arg1) {
+  return window['go']['main']['App']['LoadFontDataForFamily'](arg1);
+}
+
 export function OpenSVGFile() {
   return window['go']['main']['App']['OpenSVGFile']();
 }

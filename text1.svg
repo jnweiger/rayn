@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="57.889935mm"
+   height="11.752732mm"
+   viewBox="0 0 57.889935 11.752732"
+   version="1.1"
+   id="svg1"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm">
+    <inkscape:page
+       x="0"
+       y="-6.6842333e-22"
+       width="57.889935"
+       height="11.752731"
+       id="page2"
+       margin="0"
+       bleed="0" />
+  </sodipodi:namedview>
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Ebene 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-39.55691,-119.69112)">
+    <text
+       xml:space="preserve"
+       style="font-size:12.6817px;font-family:Galvji;-inkscape-font-specification:Galvji;writing-mode:lr-tb;direction:ltr;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.2"
+       x="42.445026"
+       y="120.94398"
+       id="text1"
+       transform="scale(0.92523627,1.080805)"><tspan
+         sodipodi:role="line"
+         id="tspan1"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-family:Chalkduster;-inkscape-font-specification:Chalkduster;fill:#000000;fill-opacity:1;stroke:none;stroke-width:0.2"
+         x="42.445026"
+         y="120.94398">Test Text</tspan></text>
+  </g>
+</svg>
