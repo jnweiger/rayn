@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
-import { fabric } from "fabric";
+import * as fabric from "fabric";
 import * as opentype from "opentype.js";
 import { main } from "../../wailsjs/go/models";
 import { LoadFontDataForFamily, OpenSVGFile } from "../../wailsjs/go/main/App";
@@ -28,9 +28,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   const bedSizeRef = useRef({ width: 600, height: 400 });
   const fitScaleRef = useRef(1);
 
-  const [selectedObject, setSelectedObject] = useState<fabric.Object | null>(null);
+  const [selectedObject, setSelectedObject] = useState<fabric.FabricObject | null>(null);
   const [objPos, setObjPos] = useState({ x: 0, y: 0, w: 0, h: 0 });
-  const [importedObjects, setImportedObjects] = useState<{id: string, name: string, ref: fabric.Object}[]>([]);
+  const [importedObjects, setImportedObjects] = useState<{id: string, name: string, ref: fabric.FabricObject}[]>([]);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [bedPreview, setBedPreview] = useState<"checker" | "white" | "gray" | "dark">("checker");
   const textFontRef = useRef<any>(null);
@@ -78,9 +78,8 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     const lowerCanvas = fabricCanvas.current.getElement();
     const upperCanvas = (fabricCanvas.current as any).upperCanvasEl as HTMLCanvasElement | undefined;
 
-    fabricCanvas.current.setBackgroundColor(background as any, () => {
-      fabricCanvas.current?.requestRenderAll();
-    });
+    fabricCanvas.current.set('backgroundColor', background as any);
+    fabricCanvas.current.requestRenderAll();
 
     lowerCanvas.style.backgroundColor = "transparent";
     lowerCanvas.style.backgroundImage = "";
@@ -136,7 +135,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
 
   const roundMm = (value: number) => Math.round(value * 100) / 100;
 
-  const updateObjPos = (obj: fabric.Object) => {
+  const updateObjPos = (obj: fabric.FabricObject) => {
     const rect = obj.getBoundingRect();
     setObjPos({
       x: roundMm(rect.left),
@@ -196,17 +195,19 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       }
     };
 
-    const constrainBounds = (e: fabric.IEvent) => {
+    const constrainBounds = (e: fabric.TEvent & { target?: fabric.FabricObject }) => {
       const obj = e.target;
       if (!obj) return;
 
       obj.setCoords();
-      if (!obj.aCoords) return;
+      const coords = obj.getCoords();
+      if (!coords || coords.length < 4) return;
+      const [tl, tr, br, bl] = coords;
 
-      const minX = Math.min(obj.aCoords.tl.x, obj.aCoords.tr.x, obj.aCoords.bl.x, obj.aCoords.br.x);
-      const minY = Math.min(obj.aCoords.tl.y, obj.aCoords.tr.y, obj.aCoords.bl.y, obj.aCoords.br.y);
-      const maxX = Math.max(obj.aCoords.tl.x, obj.aCoords.tr.x, obj.aCoords.bl.x, obj.aCoords.br.x);
-      const maxY = Math.max(obj.aCoords.tl.y, obj.aCoords.tr.y, obj.aCoords.bl.y, obj.aCoords.br.y);
+      const minX = Math.min(tl.x, tr.x, bl.x, br.x);
+      const minY = Math.min(tl.y, tr.y, bl.y, br.y);
+      const maxX = Math.max(tl.x, tr.x, bl.x, br.x);
+      const maxY = Math.max(tl.y, tr.y, bl.y, br.y);
 
       let left = obj.left || 0;
       let top = obj.top || 0;
@@ -297,7 +298,8 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       const importContent = await convertTextToPaths(response.content);
       const normalizedSvg = normalizeSvgUnitsToMm(importContent.svg);
 
-      fabric.loadSVGFromString(normalizedSvg, (objects, options) => {
+      const { objects, options } = await fabric.loadSVGFromString(normalizedSvg);
+
         if (!objects || objects.length === 0) {
           toast.error("No parseable objects found in SVG", { id: toastId });
           return;
@@ -314,14 +316,14 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
                 } catch {}
               }
             };
-            extractHex(obj.stroke);
-            extractHex(obj.fill);
+            extractHex(obj?.stroke as string | undefined);
+            extractHex(obj?.fill as string | fabric.Pattern | fabric.Gradient | undefined);
           });
           onColorsDetected(Array.from(uniqueColors));
         }
 
-        const obj = fabric.util.groupSVGElements(objects, options);
-        
+        const obj = fabric.util.groupSVGElements(objects.filter((o): o is fabric.FabricObject => o !== null), options);
+
         obj.set({
           left: 0,
           top: 0,
@@ -354,7 +356,6 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
             : `Imported ${response.fileName}`,
           { id: toastId },
         );
-      });
 
     } catch (err) {
       console.error(err);
@@ -767,7 +768,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     updateObjPos(selectedObject);
   };
 
-  const handleDeleteObject = (id: string, ref: fabric.Object) => {
+  const handleDeleteObject = (id: string, ref: fabric.FabricObject) => {
     if (!fabricCanvas.current) return;
     fabricCanvas.current.remove(ref);
     setImportedObjects(prev => prev.filter(o => o.id !== id));
@@ -777,7 +778,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     fabricCanvas.current.requestRenderAll();
   };
 
-  const handleSelectObject = (ref: fabric.Object) => {
+  const handleSelectObject = (ref: fabric.FabricObject) => {
     if (!fabricCanvas.current) return;
     fabricCanvas.current.setActiveObject(ref);
     fabricCanvas.current.requestRenderAll();
