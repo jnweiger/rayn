@@ -308,7 +308,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
         if (onColorsDetected) {
           const uniqueColors = new Set<string>();
           objects.forEach((obj) => {
-            const extractHex = (val: string | fabric.Pattern | fabric.Gradient | undefined) => {
+            const extractHex = (val: string | fabric.TFiller | undefined) => {
               if (typeof val === 'string' && val !== 'none' && val !== 'transparent') {
                 try {
                   const hex = new fabric.Color(val).toHex();
@@ -317,7 +317,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
               }
             };
             extractHex(obj?.stroke as string | undefined);
-            extractHex(obj?.fill as string | fabric.Pattern | fabric.Gradient | undefined);
+            extractHex(obj?.fill as string | fabric.TFiller | undefined);
           });
           onColorsDetected(Array.from(uniqueColors));
         }
@@ -701,7 +701,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       if (!canvas || !activeLaser) return "";
 
       const previewBackground = canvas.backgroundColor;
-      canvas.backgroundColor = undefined;
+      canvas.backgroundColor = "";
       canvas.requestRenderAll();
 
       const svg = canvas.toSVG({
