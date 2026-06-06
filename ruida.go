@@ -519,7 +519,7 @@ func parseElementGeometry(element xml.StartElement, transform ruidaTransform, st
 		if w <= 0 || h <= 0 {
 			return nil, ruidaFillShape{}
 		}
-		points := transformPoints([]ruidaPoint{{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}, transform)
+		points := transformPoints(rectPoints(element.Attr, x, y, w, h), transform)
 		if shouldScanFill(style, op) {
 			return nil, ruidaFillShape{contours: [][]ruidaPoint{points}, op: op}
 		}
@@ -572,6 +572,76 @@ func parseElementGeometry(element xml.StartElement, transform ruidaTransform, st
 	}
 
 	return nil, ruidaFillShape{}
+}
+
+func rectPoints(attrs []xml.Attr, x, y, w, h float64) []ruidaPoint {
+	rxSet := attr(attrs, "rx") != ""
+	rySet := attr(attrs, "ry") != ""
+	rx := numberAttr(attrs, "rx")
+	ry := numberAttr(attrs, "ry")
+
+	if rxSet && !rySet {
+		ry = rx
+	} else if rySet && !rxSet {
+		rx = ry
+	}
+
+	rx = math.Min(math.Abs(rx), w/2)
+	ry = math.Min(math.Abs(ry), h/2)
+	if rx <= 0 || ry <= 0 {
+		return []ruidaPoint{{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}
+	}
+
+	points := []ruidaPoint{
+		{x: x + rx, y: y},
+		{x: x + w - rx, y: y},
+	}
+	points = append(points, arcPoints(x+w-rx, y+ry, rx, ry, -math.Pi/2, 0)...)
+	points = append(points, ruidaPoint{x: x + w, y: y + h - ry})
+	points = append(points, arcPoints(x+w-rx, y+h-ry, rx, ry, 0, math.Pi/2)...)
+	points = append(points, ruidaPoint{x: x + rx, y: y + h})
+	points = append(points, arcPoints(x+rx, y+h-ry, rx, ry, math.Pi/2, math.Pi)...)
+	points = append(points, ruidaPoint{x: x, y: y + ry})
+	points = append(points, arcPoints(x+rx, y+ry, rx, ry, math.Pi, 3*math.Pi/2)...)
+	return compactPoints(points)
+}
+
+func arcPoints(cx, cy, rx, ry, start, end float64) []ruidaPoint {
+	arcLength := math.Abs(end-start) * math.Max(rx, ry)
+	steps := int(math.Ceil(arcLength / 0.25))
+	if steps < 4 {
+		steps = 4
+	}
+	if steps > 32 {
+		steps = 32
+	}
+
+	points := make([]ruidaPoint, 0, steps)
+	for i := 1; i <= steps; i++ {
+		t := float64(i) / float64(steps)
+		angle := start + (end-start)*t
+		points = append(points, ruidaPoint{
+			x: cx + math.Cos(angle)*rx,
+			y: cy + math.Sin(angle)*ry,
+		})
+	}
+	return points
+}
+
+func compactPoints(points []ruidaPoint) []ruidaPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	out := make([]ruidaPoint, 0, len(points))
+	for _, point := range points {
+		if len(out) == 0 || distance(out[len(out)-1], point) > 0.001 {
+			out = append(out, point)
+		}
+	}
+	if len(out) > 1 && distance(out[0], out[len(out)-1]) <= 0.001 {
+		out = out[:len(out)-1]
+	}
+	return out
 }
 
 func ellipsePoints(cx, cy, rx, ry float64) []ruidaPoint {

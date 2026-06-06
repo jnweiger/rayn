@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
-import { fabric } from "fabric";
+import * as fabric from "fabric";
 import * as opentype from "opentype.js";
 import { main } from "../../wailsjs/go/models";
 import { LoadFontDataForFamily, OpenSVGFile } from "../../wailsjs/go/main/App";
@@ -28,9 +28,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
   const bedSizeRef = useRef({ width: 600, height: 400 });
   const fitScaleRef = useRef(1);
 
-  const [selectedObject, setSelectedObject] = useState<fabric.Object | null>(null);
+  const [selectedObject, setSelectedObject] = useState<fabric.FabricObject | null>(null);
   const [objPos, setObjPos] = useState({ x: 0, y: 0, w: 0, h: 0 });
-  const [importedObjects, setImportedObjects] = useState<{id: string, name: string, ref: fabric.Object}[]>([]);
+  const [importedObjects, setImportedObjects] = useState<{id: string, name: string, ref: fabric.FabricObject}[]>([]);
   const [zoomPercent, setZoomPercent] = useState(100);
   const [bedPreview, setBedPreview] = useState<"checker" | "white" | "gray" | "dark">("checker");
   const textFontRef = useRef<any>(null);
@@ -78,9 +78,8 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     const lowerCanvas = fabricCanvas.current.getElement();
     const upperCanvas = (fabricCanvas.current as any).upperCanvasEl as HTMLCanvasElement | undefined;
 
-    fabricCanvas.current.setBackgroundColor(background as any, () => {
-      fabricCanvas.current?.requestRenderAll();
-    });
+    fabricCanvas.current.backgroundColor = background as any;
+    fabricCanvas.current.requestRenderAll();
 
     lowerCanvas.style.backgroundColor = "transparent";
     lowerCanvas.style.backgroundImage = "";
@@ -136,7 +135,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
 
   const roundMm = (value: number) => Math.round(value * 100) / 100;
 
-  const updateObjPos = (obj: fabric.Object) => {
+  const updateObjPos = (obj: fabric.FabricObject) => {
     const rect = obj.getBoundingRect();
     setObjPos({
       x: roundMm(rect.left),
@@ -196,7 +195,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       }
     };
 
-    const constrainBounds = (e: fabric.IEvent) => {
+    const constrainBounds = (e: { target?: fabric.FabricObject }) => {
       const obj = e.target;
       if (!obj) return;
 
@@ -297,7 +296,10 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       const importContent = await convertTextToPaths(response.content);
       const normalizedSvg = normalizeSvgUnitsToMm(importContent.svg);
 
-      fabric.loadSVGFromString(normalizedSvg, (objects, options) => {
+      const svgOutput = await fabric.loadSVGFromString(normalizedSvg);
+      const objects = svgOutput.objects.filter((obj): obj is fabric.FabricObject => Boolean(obj));
+      const options = svgOutput.options;
+
         if (!objects || objects.length === 0) {
           toast.error("No parseable objects found in SVG", { id: toastId });
           return;
@@ -306,7 +308,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
         if (onColorsDetected) {
           const uniqueColors = new Set<string>();
           objects.forEach((obj) => {
-            const extractHex = (val: string | fabric.Pattern | fabric.Gradient | undefined) => {
+            const extractHex = (val: unknown) => {
               if (typeof val === 'string' && val !== 'none' && val !== 'transparent') {
                 try {
                   const hex = new fabric.Color(val).toHex();
@@ -354,7 +356,6 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
             : `Imported ${response.fileName}`,
           { id: toastId },
         );
-      });
 
     } catch (err) {
       console.error(err);
@@ -700,7 +701,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       if (!canvas || !activeLaser) return "";
 
       const previewBackground = canvas.backgroundColor;
-      canvas.backgroundColor = undefined;
+      canvas.backgroundColor = "";
       canvas.requestRenderAll();
 
       const svg = canvas.toSVG({
@@ -767,7 +768,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     updateObjPos(selectedObject);
   };
 
-  const handleDeleteObject = (id: string, ref: fabric.Object) => {
+  const handleDeleteObject = (id: string, ref: fabric.FabricObject) => {
     if (!fabricCanvas.current) return;
     fabricCanvas.current.remove(ref);
     setImportedObjects(prev => prev.filter(o => o.id !== id));
@@ -777,7 +778,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     fabricCanvas.current.requestRenderAll();
   };
 
-  const handleSelectObject = (ref: fabric.Object) => {
+  const handleSelectObject = (ref: fabric.FabricObject) => {
     if (!fabricCanvas.current) return;
     fabricCanvas.current.setActiveObject(ref);
     fabricCanvas.current.requestRenderAll();

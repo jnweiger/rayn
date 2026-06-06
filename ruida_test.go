@@ -68,3 +68,37 @@ func TestRuidaMarkUsesLowerMinPower(t *testing.T) {
 		t.Fatalf("expected mark min power below max power, got min %d max %d", minPower, maxPower)
 	}
 }
+
+func TestRuidaRoundedRectUsesCornerRadius(t *testing.T) {
+	svg := `<svg width="30mm" height="20mm" viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">
+		<rect x="1" y="2" width="20" height="10" rx="3" ry="2" fill="none" stroke="red"/>
+	</svg>`
+
+	segments, err := parseRuidaSVG(svg, JobOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) <= 4 {
+		t.Fatalf("expected rounded rect to be approximated with more than 4 segments, got %d", len(segments))
+	}
+	if math.Abs(segments[0].from.x-4) > 0.001 || math.Abs(segments[0].from.y-2) > 0.001 {
+		t.Fatalf("expected first segment to start after the rounded corner, got %.3f/%.3f", segments[0].from.x, segments[0].from.y)
+	}
+}
+
+func TestRuidaRoundedRectFillUsesRoundedContour(t *testing.T) {
+	svg := `<svg width="30mm" height="20mm" viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg">
+		<rect x="0" y="0" width="20" height="10" rx="4" fill="black"/>
+	</svg>`
+
+	segments, err := parseRuidaSVG(svg, JobOptions{EngraveLineSpacingMM: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(segments) == 0 {
+		t.Fatal("expected rounded filled rect to generate engrave scanlines")
+	}
+	if segments[0].from.x <= 0 {
+		t.Fatalf("expected first scanline to respect rounded corner inset, got x %.3f", segments[0].from.x)
+	}
+}
