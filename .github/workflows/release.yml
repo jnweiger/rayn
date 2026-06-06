@@ -39,6 +39,9 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            curl \
+            desktop-file-utils \
+            file \
             patchelf \
             pkg-config
 
@@ -48,16 +51,20 @@ jobs:
       - name: Build
         run: wails build -clean -tags webkit2_41
 
-      - name: Package Linux artifact
+      - name: Set release version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Package Linux installers
         run: |
-          mkdir -p dist
-          tar -czf dist/rayn-linux-amd64.tar.gz -C build/bin .
+          bash .github/scripts/package-linux.sh
 
       - name: Upload release asset
         uses: actions/upload-artifact@v4
         with:
-          name: rayn-linux-amd64
-          path: dist/*
+          name: rayn-linux-installers-amd64
+          path: |
+            dist/*.deb
+            dist/*.AppImage
           if-no-files-found: error
 
   release:

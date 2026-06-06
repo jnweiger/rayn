@@ -43,6 +43,9 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            curl \
+            desktop-file-utils \
+            file \
             patchelf \
             pkg-config
 
@@ -52,15 +55,15 @@ jobs:
       - name: Build
         run: wails build -clean -tags webkit2_41
 
-      - name: Package Linux artifact
-        run: |
-          mkdir -p dist
-          tar -czf dist/rayn-linux-amd64.tar.gz -C build/bin .
+      - name: Package Linux installers
+        run: bash .github/scripts/package-linux.sh
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rayn-linux-amd64
-          path: dist/*
+          name: rayn-linux-installers-amd64
+          path: |
+            dist/*.deb
+            dist/*.AppImage
           if-no-files-found: error
           retention-days: 14
