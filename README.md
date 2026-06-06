@@ -111,9 +111,46 @@ wails build
 
 Wails regenerates frontend bindings during `wails dev` and `wails build` when exported Go methods or models change.
 
+## Installing on Linux
+
+Linux releases are published as a Debian package and an AppImage.
+
+For Ubuntu/Debian, prefer the `.deb` package because it declares the required desktop runtime dependencies:
+
+```bash
+sudo apt install ./rayn_0.1.0_amd64.deb
+rayn
+```
+
+If `apt` reports missing dependencies, update your package index and retry:
+
+```bash
+sudo apt update
+sudo apt install ./rayn_0.1.0_amd64.deb
+```
+
+To remove Rayn again:
+
+```bash
+sudo apt remove rayn
+```
+
+The AppImage can be run without installing the app into the system:
+
+```bash
+chmod +x Rayn-0.1.0-x86_64.AppImage
+./Rayn-0.1.0-x86_64.AppImage
+```
+
+Depending on the distribution, the AppImage may still require WebKitGTK to be installed:
+
+```bash
+sudo apt install -y libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2
+```
+
 ## CI Builds and Releases
 
-GitHub Actions builds Rayn for macOS, Windows and Linux on every push or pull request targeting `main`.
+GitHub Actions currently builds Rayn for Linux on every push or pull request targeting `main`.
 
 Merge builds are uploaded as workflow artifacts. You can find them in the finished GitHub Actions run under `Artifacts`. These artifacts are meant for testing and are retained for a limited time.
 
@@ -124,7 +161,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Pushing a `v*` tag builds all supported platforms and attaches the packaged files to a GitHub Release.
+Pushing a `v*` tag builds the Linux `.deb` and `.AppImage` files and attaches them to a GitHub Release.
 
 ## Project Structure
 
