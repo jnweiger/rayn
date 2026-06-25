@@ -78,7 +78,8 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
     const lowerCanvas = fabricCanvas.current.getElement();
     const upperCanvas = (fabricCanvas.current as any).upperCanvasEl as HTMLCanvasElement | undefined;
 
-    fabricCanvas.current.set('backgroundColor', background as any);
+
+    fabricCanvas.current.backgroundColor = background as any;
     fabricCanvas.current.requestRenderAll();
 
     lowerCanvas.style.backgroundColor = "transparent";
@@ -195,7 +196,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       }
     };
 
-    const constrainBounds = (e: fabric.TEvent & { target?: fabric.FabricObject }) => {
+    const constrainBounds = (e: { target?: fabric.FabricObject }) => {
       const obj = e.target;
       if (!obj) return;
 
@@ -298,7 +299,9 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
       const importContent = await convertTextToPaths(response.content);
       const normalizedSvg = normalizeSvgUnitsToMm(importContent.svg);
 
-      const { objects, options } = await fabric.loadSVGFromString(normalizedSvg);
+      const svgOutput = await fabric.loadSVGFromString(normalizedSvg);
+      const objects = svgOutput.objects.filter((obj): obj is fabric.FabricObject => Boolean(obj));
+      const options = svgOutput.options;
 
         if (!objects || objects.length === 0) {
           toast.error("No parseable objects found in SVG", { id: toastId });
@@ -308,7 +311,7 @@ const Workspace = forwardRef<WorkspaceRef, WorkspaceProps>(({ activeLaser, onCol
         if (onColorsDetected) {
           const uniqueColors = new Set<string>();
           objects.forEach((obj) => {
-            const extractHex = (val: string | fabric.TFiller | undefined) => {
+            const extractHex = (val: unknown) => {
               if (typeof val === 'string' && val !== 'none' && val !== 'transparent') {
                 try {
                   const hex = new fabric.Color(val).toHex();
