@@ -1,4 +1,6 @@
 # Rayn
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjnweiger%2Frayn.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjnweiger%2Frayn?ref=badge_shield)
+
 
 Rayn is a desktop app for preparing laser cutter jobs. It is built with Wails, Go, React, Tailwind CSS and Fabric.js.
 
@@ -198,3 +200,7 @@ The main files are:
 - `profiles.json`
 
 These files are local development/user data and should not be committed.
+
+
+## License
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fjnweiger%2Frayn.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fjnweiger%2Frayn?ref=badge_large)
